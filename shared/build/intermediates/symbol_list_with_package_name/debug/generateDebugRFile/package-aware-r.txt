@@ -1,0 +1,1 @@
+com.roy.camera_test.shared
