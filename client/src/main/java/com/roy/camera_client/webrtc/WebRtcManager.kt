@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.roy.camera_test.ICameraBroker
 import org.webrtc.*
+import org.webrtc.audio.JavaAudioDeviceModule
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 
@@ -67,12 +68,19 @@ class WebRtcManager(private val context: Context) {
         )
         val decoderFactory = DefaultVideoDecoderFactory(eglBase!!.eglBaseContext)
 
+        // Audio device module for microphone capture
+        val audioDeviceModule = JavaAudioDeviceModule.builder(context)
+            .setUseHardwareAcousticEchoCanceler(true)
+            .setUseHardwareNoiseSuppressor(true)
+            .createAudioDeviceModule()
+
         peerConnectionFactory = PeerConnectionFactory.builder()
+            .setAudioDeviceModule(audioDeviceModule)
             .setVideoEncoderFactory(encoderFactory)
             .setVideoDecoderFactory(decoderFactory)
             .createPeerConnectionFactory()
 
-        Log.d(TAG, "PeerConnectionFactory created")
+        Log.d(TAG, "PeerConnectionFactory created with AudioDeviceModule")
     }
 
     /**
