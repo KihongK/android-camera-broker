@@ -222,25 +222,18 @@ fun PreviewScreen(
     onBack: () -> Unit
 ) {
     Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
                 .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text(
-                text = "SharedMemory Preview",
-                style = MaterialTheme.typography.headlineSmall
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Preview area
+            // Left panel - Preview area
             Box(
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
+                    .weight(2f)
+                    .fillMaxHeight()
                     .background(Color.Black),
                 contentAlignment = Alignment.Center
             ) {
@@ -259,29 +252,35 @@ fun PreviewScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Frame info card
-            Card(
-                modifier = Modifier.fillMaxWidth()
+            // Right panel - Info & Controls
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    text = frameInfo,
-                    modifier = Modifier.padding(12.dp),
-                    style = MaterialTheme.typography.bodyMedium
+                    text = "SharedMemory Preview",
+                    style = MaterialTheme.typography.titleMedium
                 )
-            }
 
-            Spacer(modifier = Modifier.height(16.dp))
+                // Frame info card
+                Card(
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = frameInfo,
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
 
-            // Control buttons
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
+                Spacer(modifier = Modifier.weight(1f))
+
+                // Control buttons
                 Button(
                     onClick = if (isRunning) onStop else onStart,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
                     colors = if (isRunning) {
                         ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                     } else {
@@ -293,7 +292,7 @@ fun PreviewScreen(
 
                 OutlinedButton(
                     onClick = onBack,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("Back")
                 }

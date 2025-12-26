@@ -1,84 +1,107 @@
 package com.roy.camera_client
 
+import android.Manifest
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
-import android.graphics.Bitmap
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.IBinder
 import android.util.Log
+import android.view.ViewGroup
+import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.Image
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import com.roy.camera_client.ui.theme.CameraClientTheme
-import com.roy.camera_test.FrameInfo
+import com.roy.camera_client.webrtc.SignalingClient
+import com.roy.camera_client.webrtc.WebRtcConfig
+import com.roy.camera_client.webrtc.WebRtcManager
 import com.roy.camera_test.ICameraBroker
-import com.roy.camera_test.util.YuvConverter
-import kotlinx.coroutines.*
+import org.webrtc.SurfaceViewRenderer
 import java.nio.ByteBuffer
 
 class MainActivity : ComponentActivity() {
 
     companion object {
-        private const val TAG = "CameraClient"
+        private const val TAG = "WebRtcHost"
         private const val BROKER_PACKAGE = "com.roy.camera_test"
         private const val BROKER_ACTION = "com.roy.camera_test.CAMERA_BROKER"
     }
 
+    // Camera Broker IPC
     private var cameraBroker: ICameraBroker? = null
     private var isBound = false
     private var sharedMemory: android.os.SharedMemory? = null
     private var readBuffer: ByteBuffer? = null
 
-    // UI State
-    private val _connectionState = mutableStateOf("Disconnected")
-    private val _previewBitmap = mutableStateOf<Bitmap?>(null)
-    private val _frameInfo = mutableStateOf("No frame")
-    private val _isStreaming = mutableStateOf(false)
+    // WebRTC
+    private var webRtcManager: WebRtcManager? = null
+    private var signalingClient: SignalingClient? = null
+    private var surfaceViewRenderer: SurfaceViewRenderer? = null
 
-    private var streamJob: Job? = null
+    // UI State
+    private val _brokerState = mutableStateOf("Disconnected")
+    private val _signalingState = mutableStateOf("Disconnected")
+    private val _webRtcState = mutableStateOf("Not initialized")
+    private val _dataChannelState = mutableStateOf("Closed")
+    private val _roomName = mutableStateOf(WebRtcConfig.DEFAULT_ROOM_NAME)
+    private val _isStreaming = mutableStateOf(false)
+    private val _isMuted = mutableStateOf(false)
+    private val _commandLog = mutableStateListOf<String>()
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-            Log.d(TAG, "Service connected: $name")
+            Log.d(TAG, "Broker connected")
             cameraBroker = ICameraBroker.Stub.asInterface(service)
             isBound = true
-            _connectionState.value = "Connected to Broker"
 
-            // Get SharedMemory via AIDL
             try {
                 sharedMemory = cameraBroker?.sharedMemory
                 if (sharedMemory != null) {
                     readBuffer = sharedMemory?.mapReadOnly()
-                    Log.d(TAG, "SharedMemory mapped: ${sharedMemory?.size} bytes")
-                    _connectionState.value = "SharedMemory ready (${sharedMemory?.size} bytes)"
+                    _brokerState.value = "Connected"
                 } else {
-                    _connectionState.value = "SharedMemory not available"
+                    _brokerState.value = "SharedMemory N/A"
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to get SharedMemory", e)
-                _connectionState.value = "Error: ${e.message}"
+                _brokerState.value = "Error"
             }
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
-            Log.d(TAG, "Service disconnected")
+            Log.d(TAG, "Broker disconnected")
             cameraBroker = null
             isBound = false
-            _connectionState.value = "Disconnected"
+            _brokerState.value = "Disconnected"
             stopStreaming()
+        }
+    }
+
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            Log.d(TAG, "Audio permission granted")
+            startAudioCapture()
+        } else {
+            Log.e(TAG, "Audio permission denied")
         }
     }
 
@@ -86,40 +109,181 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        initializeWebRtc()
+        initializeSignaling()
+
         setContent {
             CameraClientTheme {
-                ClientScreen(
-                    connectionState = _connectionState.value,
-                    bitmap = _previewBitmap.value,
-                    frameInfo = _frameInfo.value,
+                HostScreen(
+                    brokerState = _brokerState.value,
+                    signalingState = _signalingState.value,
+                    webRtcState = _webRtcState.value,
+                    dataChannelState = _dataChannelState.value,
+                    roomName = _roomName.value,
                     isStreaming = _isStreaming.value,
-                    onConnect = { connectToBroker() },
-                    onDisconnect = { disconnectFromBroker() },
-                    onStartStream = { startStreaming() },
-                    onStopStream = { stopStreaming() },
-                    onOpenWebRtc = { openWebRtcActivity() }
+                    isMuted = _isMuted.value,
+                    commandLog = _commandLog,
+                    onRoomNameChange = { _roomName.value = it },
+                    onConnectBroker = { connectToBroker() },
+                    onDisconnectBroker = { disconnectFromBroker() },
+                    onJoinRoom = { joinRoom() },
+                    onLeaveRoom = { leaveRoom() },
+                    onStartStreaming = { startStreaming() },
+                    onStopStreaming = { stopStreaming() },
+                    onToggleMute = { toggleMute() },
+                    onSendNotification = { sendNotification(it) },
+                    onRendererCreated = { renderer ->
+                        surfaceViewRenderer = renderer
+                        webRtcManager?.addLocalRenderer(renderer)
+                    }
                 )
             }
         }
     }
 
-    private fun openWebRtcActivity() {
-        startActivity(Intent(this, WebRtcActivity::class.java))
-    }
-
     override fun onDestroy() {
         super.onDestroy()
+        leaveRoom()
         stopStreaming()
+        surfaceViewRenderer?.let { webRtcManager?.removeLocalRenderer(it) }
+        webRtcManager?.release()
         disconnectFromBroker()
     }
 
-    private fun connectToBroker() {
-        if (isBound) {
-            Log.d(TAG, "Already connected")
-            return
-        }
+    private fun initializeWebRtc() {
+        webRtcManager = WebRtcManager(this).apply {
+            initialize()
 
-        _connectionState.value = "Connecting..."
+            onConnectionStateChange = { state ->
+                runOnUiThread {
+                    _webRtcState.value = state.name
+                }
+            }
+
+            onLocalDescription = { sdp ->
+                // Send offer via signaling
+                signalingClient?.sendOffer(sdp)
+            }
+
+            onIceCandidate = { candidate ->
+                // Send ICE candidate via signaling
+                signalingClient?.sendIceCandidate(candidate)
+            }
+
+            onDataChannelStateChange = { state ->
+                runOnUiThread {
+                    _dataChannelState.value = state.name
+                }
+            }
+
+            onCommandReceived = { command ->
+                runOnUiThread {
+                    _commandLog.add(0, "< $command")
+                    handleCommand(command)
+                }
+            }
+        }
+        _webRtcState.value = "Initialized"
+    }
+
+    private fun initializeSignaling() {
+        signalingClient = SignalingClient().apply {
+            onConnected = {
+                runOnUiThread {
+                    _signalingState.value = "Connected"
+                    addLog("Signaling connected")
+                }
+            }
+
+            onDisconnected = { reason ->
+                runOnUiThread {
+                    _signalingState.value = "Disconnected"
+                    addLog("Signaling disconnected: $reason")
+                }
+            }
+
+            onRoomJoined = { room ->
+                runOnUiThread {
+                    _signalingState.value = "In room: $room"
+                    addLog("Joined room: $room")
+                }
+            }
+
+            onPeerJoined = { peerId ->
+                runOnUiThread {
+                    addLog("Peer joined: $peerId")
+                    // Create offer for new peer
+                    if (_isStreaming.value) {
+                        webRtcManager?.createOffer()
+                    }
+                }
+            }
+
+            onCallReady = { peerId ->
+                runOnUiThread {
+                    addLog("Peer already in room: $peerId")
+                    // Create offer if already streaming
+                    if (_isStreaming.value) {
+                        webRtcManager?.createOffer()
+                    }
+                }
+            }
+
+            onPeerLeft = { peerId ->
+                runOnUiThread {
+                    addLog("Peer left: $peerId")
+                }
+            }
+
+            onAnswerReceived = { sdp, peerId ->
+                Log.d(TAG, "Answer received from: $peerId")
+                webRtcManager?.setRemoteDescription(sdp)
+            }
+
+            onIceCandidateReceived = { candidate, peerId ->
+                Log.d(TAG, "ICE candidate received from: $peerId")
+                webRtcManager?.addIceCandidate(candidate)
+            }
+
+            onError = { error ->
+                runOnUiThread {
+                    addLog("Error: $error")
+                }
+            }
+        }
+    }
+
+    private fun handleCommand(command: String) {
+        Log.d(TAG, "Handling command: $command")
+        when {
+            command.startsWith("MUTE") -> {
+                _isMuted.value = true
+                webRtcManager?.setAudioEnabled(false)
+            }
+            command.startsWith("UNMUTE") -> {
+                _isMuted.value = false
+                webRtcManager?.setAudioEnabled(true)
+            }
+            command.startsWith("PING") -> {
+                sendNotification("PONG")
+            }
+            else -> {
+                Log.d(TAG, "Unknown command: $command")
+            }
+        }
+    }
+
+    private fun addLog(message: String) {
+        _commandLog.add(0, message)
+        if (_commandLog.size > 50) {
+            _commandLog.removeAt(_commandLog.size - 1)
+        }
+    }
+
+    private fun connectToBroker() {
+        if (isBound) return
+
+        _brokerState.value = "Connecting..."
 
         val intent = Intent(BROKER_ACTION).apply {
             setPackage(BROKER_PACKAGE)
@@ -128,11 +292,11 @@ class MainActivity : ComponentActivity() {
         try {
             val bound = bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
             if (!bound) {
-                _connectionState.value = "Failed to bind. Is Broker app running?"
+                _brokerState.value = "Failed"
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to bind", e)
-            _connectionState.value = "Error: ${e.message}"
+            _brokerState.value = "Error"
         }
     }
 
@@ -158,229 +322,334 @@ class MainActivity : ComponentActivity() {
             isBound = false
         }
         cameraBroker = null
-        _connectionState.value = "Disconnected"
+        _brokerState.value = "Disconnected"
+    }
+
+    private fun joinRoom() {
+        val room = _roomName.value.trim()
+        if (room.isEmpty()) {
+            addLog("Room name is empty")
+            return
+        }
+
+        _signalingState.value = "Joining..."
+        signalingClient?.joinRoom(room, asHost = true)
+    }
+
+    private fun leaveRoom() {
+        signalingClient?.leaveRoom()
+        _signalingState.value = "Disconnected"
     }
 
     private fun startStreaming() {
-        if (_isStreaming.value) return
+        val broker = cameraBroker
+        val buffer = readBuffer
+
+        if (broker == null || buffer == null) {
+            addLog("Broker not connected")
+            return
+        }
+
+        if (!signalingClient?.isConnected()!!) {
+            addLog("Not connected to signaling server")
+            return
+        }
+
+        // Start video capture
+        webRtcManager?.startVideoCapture(broker, buffer)
+
+        // Check audio permission and start audio
+        checkAudioPermissionAndStart()
+
+        // Create peer connection
+        webRtcManager?.createPeerConnection()
+
+        // Create offer
+        webRtcManager?.createOffer()
+
         _isStreaming.value = true
+        _webRtcState.value = "Streaming"
+        addLog("Streaming started")
+    }
 
-        streamJob = CoroutineScope(Dispatchers.Default).launch {
-            var lastFrameCounter = -1L
+    private fun checkAudioPermissionAndStart() {
+        val hasPermission = ContextCompat.checkSelfPermission(
+            this, Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
 
-            while (isActive && _isStreaming.value) {
-                try {
-                    val broker = cameraBroker
-                    val buffer = readBuffer
-
-                    if (broker == null || buffer == null) {
-                        withContext(Dispatchers.Main) {
-                            _frameInfo.value = "Not connected"
-                        }
-                        delay(100)
-                        continue
-                    }
-
-                    val isStreamingNow = broker.isStreaming
-                    if (!isStreamingNow) {
-                        withContext(Dispatchers.Main) {
-                            _frameInfo.value = "Broker not streaming"
-                        }
-                        delay(100)
-                        continue
-                    }
-
-                    val frameCounter = broker.frameCounter
-                    Log.d(TAG, "frameCounter=$frameCounter, lastFrameCounter=$lastFrameCounter")
-                    if (frameCounter == lastFrameCounter) {
-                        delay(5)
-                        continue
-                    }
-                    lastFrameCounter = frameCounter
-
-                    val info: FrameInfo? = broker.currentFrameInfo
-                    if (info == null) {
-                        withContext(Dispatchers.Main) {
-                            _frameInfo.value = "Frame info null (counter=$frameCounter)"
-                        }
-                        delay(10)
-                        continue
-                    }
-
-                    Log.d(TAG, "Frame: ${info.width}x${info.height}, Y=${info.yPlaneSize}, U=${info.uPlaneSize}, V=${info.vPlaneSize}")
-
-                    // Convert YUV to Bitmap
-                    val bitmap = synchronized(buffer) {
-                        buffer.position(0)  // Reset position before reading
-                        YuvConverter.yuv420ToBitmap(
-                            buffer = buffer,
-                            width = info.width,
-                            height = info.height,
-                            ySize = info.yPlaneSize,
-                            uSize = info.uPlaneSize,
-                            vSize = info.vPlaneSize,
-                            uvPixelStride = info.uvPixelStride
-                        )
-                    }
-
-                    withContext(Dispatchers.Main) {
-                        _previewBitmap.value = bitmap
-                        _frameInfo.value = buildString {
-                            append("Frame: $frameCounter\n")
-                            append("Size: ${info.width}x${info.height}\n")
-                            append("Timestamp: ${info.timestamp / 1_000_000}ms")
-                        }
-                    }
-
-                    delay(33) // ~30 FPS
-                } catch (e: Exception) {
-                    Log.e(TAG, "Stream error", e)
-                    withContext(Dispatchers.Main) {
-                        _frameInfo.value = "Error: ${e.message}"
-                    }
-                    delay(100)
-                }
-            }
+        if (hasPermission) {
+            startAudioCapture()
+        } else {
+            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 
+    private fun startAudioCapture() {
+        webRtcManager?.startAudioCapture()
+    }
+
     private fun stopStreaming() {
+        webRtcManager?.stopCapture()
+        webRtcManager?.closePeerConnection()
         _isStreaming.value = false
-        streamJob?.cancel()
-        streamJob = null
+        _webRtcState.value = "Stopped"
+        _dataChannelState.value = "Closed"
+        addLog("Streaming stopped")
+    }
+
+    private fun toggleMute() {
+        _isMuted.value = !_isMuted.value
+        webRtcManager?.setAudioEnabled(!_isMuted.value)
+    }
+
+    private fun sendNotification(message: String) {
+        val sent = webRtcManager?.sendNotification(message) ?: false
+        if (sent) {
+            _commandLog.add(0, "> $message")
+        }
     }
 }
 
 @Composable
-fun ClientScreen(
-    connectionState: String,
-    bitmap: Bitmap?,
-    frameInfo: String,
+fun HostScreen(
+    brokerState: String,
+    signalingState: String,
+    webRtcState: String,
+    dataChannelState: String,
+    roomName: String,
     isStreaming: Boolean,
-    onConnect: () -> Unit,
-    onDisconnect: () -> Unit,
-    onStartStream: () -> Unit,
-    onStopStream: () -> Unit,
-    onOpenWebRtc: () -> Unit
+    isMuted: Boolean,
+    commandLog: List<String>,
+    onRoomNameChange: (String) -> Unit,
+    onConnectBroker: () -> Unit,
+    onDisconnectBroker: () -> Unit,
+    onJoinRoom: () -> Unit,
+    onLeaveRoom: () -> Unit,
+    onStartStreaming: () -> Unit,
+    onStopStreaming: () -> Unit,
+    onToggleMute: () -> Unit,
+    onSendNotification: (String) -> Unit,
+    onRendererCreated: (SurfaceViewRenderer) -> Unit
 ) {
+    val isInRoom = signalingState.startsWith("In room")
+
     Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text(
-                text = "Camera Client",
-                style = MaterialTheme.typography.headlineMedium
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Connection status
+            // Left panel - Video Preview
             Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = if (connectionState.startsWith("SharedMemory"))
-                        MaterialTheme.colorScheme.primaryContainer
-                    else
-                        MaterialTheme.colorScheme.surfaceVariant
-                )
+                modifier = Modifier
+                    .weight(2f)
+                    .fillMaxHeight()
             ) {
-                Text(
-                    text = connectionState,
-                    modifier = Modifier.padding(12.dp),
-                    style = MaterialTheme.typography.bodyMedium
-                )
+                Box(modifier = Modifier.fillMaxSize()) {
+                    AndroidView(
+                        factory = { ctx ->
+                            SurfaceViewRenderer(ctx).apply {
+                                layoutParams = FrameLayout.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ViewGroup.LayoutParams.MATCH_PARENT
+                                )
+                                onRendererCreated(this)
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    if (!isStreaming) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.7f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("Not Streaming", color = Color.White)
+                        }
+                    }
+
+                    if (isMuted && isStreaming) {
+                        Text(
+                            text = "MUTED",
+                            color = Color.Red,
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(8.dp)
+                                .background(Color.Black.copy(alpha = 0.5f))
+                                .padding(4.dp)
+                        )
+                    }
+                }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Connect/Disconnect buttons
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Button(
-                    onClick = onConnect,
-                    modifier = Modifier.weight(1f),
-                    enabled = !connectionState.startsWith("SharedMemory")
-                ) {
-                    Text("Connect")
-                }
-                OutlinedButton(
-                    onClick = onDisconnect,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Disconnect")
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Preview area
-            Box(
+            // Right panel - Controls
+            Column(
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxWidth()
-                    .background(Color.Black),
-                contentAlignment = Alignment.Center
+                    .fillMaxHeight(),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                if (bitmap != null) {
-                    Image(
-                        bitmap = bitmap.asImageBitmap(),
-                        contentDescription = "Camera Preview",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Fit
+                Text(
+                    text = "WebRTC Host",
+                    style = MaterialTheme.typography.titleMedium
+                )
+
+                // Status
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
                     )
-                } else {
-                    Text(
-                        text = "No Preview",
-                        color = Color.Gray
-                    )
+                ) {
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        StatusRow("Broker", brokerState, brokerState == "Connected")
+                        StatusRow("Signaling", signalingState, isInRoom)
+                        StatusRow("WebRTC", webRtcState, webRtcState == "CONNECTED")
+                        StatusRow("DataChannel", dataChannelState, dataChannelState == "OPEN")
+                    }
+                }
+
+                // Room name input
+                OutlinedTextField(
+                    value = roomName,
+                    onValueChange = onRoomNameChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Room Name") },
+                    singleLine = true,
+                    enabled = !isInRoom
+                )
+
+                // Broker controls
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Button(
+                        onClick = onConnectBroker,
+                        modifier = Modifier.weight(1f),
+                        enabled = brokerState == "Disconnected",
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                    ) {
+                        Text("Broker", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Button(
+                        onClick = if (isInRoom) onLeaveRoom else onJoinRoom,
+                        modifier = Modifier.weight(1f),
+                        colors = if (isInRoom) {
+                            ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                        } else {
+                            ButtonDefaults.buttonColors()
+                        },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            if (isInRoom) "Leave" else "Join",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+
+                // Streaming controls
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Button(
+                        onClick = if (isStreaming) onStopStreaming else onStartStreaming,
+                        modifier = Modifier.weight(1f),
+                        colors = if (isStreaming) {
+                            ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                        } else {
+                            ButtonDefaults.buttonColors()
+                        },
+                        enabled = brokerState == "Connected" && isInRoom,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            if (isStreaming) "Stop" else "Start",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = onToggleMute,
+                        modifier = Modifier.weight(1f),
+                        enabled = isStreaming,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            if (isMuted) "Unmute" else "Mute",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+
+                HorizontalDivider()
+
+                // Send alert notification
+                Button(
+                    onClick = { onSendNotification("NOTIFY:ALERT") },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = dataChannelState == "OPEN",
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Text("Send ALERT", style = MaterialTheme.typography.bodySmall)
+                }
+
+                // Log
+                Text(
+                    text = "Log",
+                    style = MaterialTheme.typography.labelSmall
+                )
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                ) {
+                    val listState = rememberLazyListState()
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(6.dp)
+                    ) {
+                        items(commandLog) { log ->
+                            Text(
+                                text = log,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = when {
+                                    log.startsWith(">") -> MaterialTheme.colorScheme.primary
+                                    log.startsWith("<") -> MaterialTheme.colorScheme.secondary
+                                    log.startsWith("Error") -> MaterialTheme.colorScheme.error
+                                    else -> MaterialTheme.colorScheme.onSurface
+                                }
+                            )
+                        }
+                    }
                 }
             }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Frame info
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    text = frameInfo,
-                    modifier = Modifier.padding(12.dp),
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Stream controls
-            Button(
-                onClick = if (isStreaming) onStopStream else onStartStream,
-                modifier = Modifier.fillMaxWidth(),
-                colors = if (isStreaming) {
-                    ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                } else {
-                    ButtonDefaults.buttonColors()
-                },
-                enabled = connectionState.startsWith("SharedMemory")
-            ) {
-                Text(if (isStreaming) "Stop Streaming" else "Start Streaming")
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // WebRTC button
-            OutlinedButton(
-                onClick = onOpenWebRtc,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = MaterialTheme.colorScheme.secondary
-                )
-            ) {
-                Text("Open WebRTC Preview")
-            }
         }
+    }
+}
+
+@Composable
+fun StatusRow(title: String, status: String, isActive: Boolean) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelSmall
+        )
+        Text(
+            text = status,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }

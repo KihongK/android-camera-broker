@@ -4,41 +4,7 @@
             "outputFile": "com.roy.camera_client-mergeDebugResources-31:/values-km/values-km.xml",
             "map": [
                 {
-                    "source": "C:\\Users\\roy\\.gradle\\caches\\8.13\\transforms\\5f552f8123d8e6ee03da22f0b5d56aac\\transformed\\foundation-release\\res\\values-km\\values-km.xml",
-                    "from": {
-                        "startLines": "2,3,4",
-                        "startColumns": "4,4,4",
-                        "startOffsets": "55,142,233",
-                        "endColumns": "86,90,91",
-                        "endOffsets": "137,228,320"
-                    },
-                    "to": {
-                        "startLines": "2,87,88",
-                        "startColumns": "4,4,4",
-                        "startOffsets": "105,8900,8991",
-                        "endColumns": "86,90,91",
-                        "endOffsets": "187,8986,9078"
-                    }
-                },
-                {
-                    "source": "C:\\Users\\roy\\.gradle\\caches\\8.13\\transforms\\e81328fa094facb11cbd9127b20abb5d\\transformed\\core-1.17.0\\res\\values-km\\values-km.xml",
-                    "from": {
-                        "startLines": "2,3,4,5,6,7,8,9",
-                        "startColumns": "4,4,4,4,4,4,4,4",
-                        "startOffsets": "55,150,253,351,451,552,664,776",
-                        "endColumns": "94,102,97,99,100,111,111,100",
-                        "endOffsets": "145,248,346,446,547,659,771,872"
-                    },
-                    "to": {
-                        "startLines": "3,4,5,6,7,8,9,83",
-                        "startColumns": "4,4,4,4,4,4,4,4",
-                        "startOffsets": "192,287,390,488,588,689,801,8531",
-                        "endColumns": "94,102,97,99,100,111,111,100",
-                        "endOffsets": "282,385,483,583,684,796,908,8627"
-                    }
-                },
-                {
-                    "source": "C:\\Users\\roy\\.gradle\\caches\\8.13\\transforms\\59449cc3736392be66829d310f7b3d7c\\transformed\\ui-release\\res\\values-km\\values-km.xml",
+                    "source": "/Users/ac01-kkhong/.gradle/caches/8.13/transforms/59449cc3736392be66829d310f7b3d7c/transformed/ui-release/res/values-km/values-km.xml",
                     "from": {
                         "startLines": "3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21",
                         "startColumns": "4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4",
@@ -55,7 +21,24 @@
                     }
                 },
                 {
-                    "source": "C:\\Users\\roy\\.gradle\\caches\\8.13\\transforms\\210398aeae304f69582b9b733691af38\\transformed\\material3-release\\res\\values-km\\values-km.xml",
+                    "source": "/Users/ac01-kkhong/.gradle/caches/8.13/transforms/5f552f8123d8e6ee03da22f0b5d56aac/transformed/foundation-release/res/values-km/values-km.xml",
+                    "from": {
+                        "startLines": "2,3,4",
+                        "startColumns": "4,4,4",
+                        "startOffsets": "55,142,233",
+                        "endColumns": "86,90,91",
+                        "endOffsets": "137,228,320"
+                    },
+                    "to": {
+                        "startLines": "2,87,88",
+                        "startColumns": "4,4,4",
+                        "startOffsets": "105,8900,8991",
+                        "endColumns": "86,90,91",
+                        "endOffsets": "187,8986,9078"
+                    }
+                },
+                {
+                    "source": "/Users/ac01-kkhong/.gradle/caches/8.13/transforms/210398aeae304f69582b9b733691af38/transformed/material3-release/res/values-km/values-km.xml",
                     "from": {
                         "startLines": "2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58",
                         "startColumns": "4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4",
@@ -69,6 +52,23 @@
                         "startOffsets": "1535,1653,1772,1878,1994,2096,2202,2325,2469,2597,2749,2840,2940,3040,3150,3274,3399,3504,3630,3756,3884,4046,4168,4282,4395,4518,4619,4719,4845,4984,5088,5193,5305,5430,5558,5675,5783,5859,5956,6052,6160,6248,6336,6437,6517,6601,6701,6803,6899,7008,7095,7200,7298,7409,7526,7606,7713",
                         "endColumns": "117,118,105,115,101,105,122,143,127,151,90,99,99,109,123,124,104,125,125,127,161,121,113,112,122,100,99,125,138,103,104,111,124,127,116,107,75,96,95,107,87,87,100,79,83,99,101,95,108,86,104,97,110,116,79,106,99",
                         "endOffsets": "1648,1767,1873,1989,2091,2197,2320,2464,2592,2744,2835,2935,3035,3145,3269,3394,3499,3625,3751,3879,4041,4163,4277,4390,4513,4614,4714,4840,4979,5083,5188,5300,5425,5553,5670,5778,5854,5951,6047,6155,6243,6331,6432,6512,6596,6696,6798,6894,7003,7090,7195,7293,7404,7521,7601,7708,7808"
+                    }
+                },
+                {
+                    "source": "/Users/ac01-kkhong/.gradle/caches/8.13/transforms/e81328fa094facb11cbd9127b20abb5d/transformed/core-1.17.0/res/values-km/values-km.xml",
+                    "from": {
+                        "startLines": "2,3,4,5,6,7,8,9",
+                        "startColumns": "4,4,4,4,4,4,4,4",
+                        "startOffsets": "55,150,253,351,451,552,664,776",
+                        "endColumns": "94,102,97,99,100,111,111,100",
+                        "endOffsets": "145,248,346,446,547,659,771,872"
+                    },
+                    "to": {
+                        "startLines": "3,4,5,6,7,8,9,83",
+                        "startColumns": "4,4,4,4,4,4,4,4",
+                        "startOffsets": "192,287,390,488,588,689,801,8531",
+                        "endColumns": "94,102,97,99,100,111,111,100",
+                        "endOffsets": "282,385,483,583,684,796,908,8627"
                     }
                 }
             ]

@@ -4,7 +4,7 @@
             "outputFile": "com.roy.camera_client-mergeDebugResources-31:/values-v30/values-v30.xml",
             "map": [
                 {
-                    "source": "C:\\Users\\roy\\.gradle\\caches\\8.13\\transforms\\210398aeae304f69582b9b733691af38\\transformed\\material3-release\\res\\values-v30\\values-v30.xml",
+                    "source": "/Users/ac01-kkhong/.gradle/caches/8.13/transforms/210398aeae304f69582b9b733691af38/transformed/material3-release/res/values-v30/values-v30.xml",
                     "from": {
                         "startLines": "2",
                         "startColumns": "4",

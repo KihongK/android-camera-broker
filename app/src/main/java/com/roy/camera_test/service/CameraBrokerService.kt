@@ -7,16 +7,15 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.ImageFormat
+import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
-import android.hardware.camera2.params.OutputConfiguration
-import android.hardware.camera2.params.SessionConfiguration
 import android.media.ImageReader
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
-import android.os.Looper
 import android.os.SharedMemory
+import android.view.Surface
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.roy.camera_test.FrameInfo
@@ -48,6 +47,10 @@ class CameraBrokerService : Service() {
     private var imageReader: ImageReader? = null
     private var backgroundHandler: Handler? = null
     private var backgroundThread: HandlerThread? = null
+
+    // Dummy surface for LEGACY cameras that require a preview surface
+    private var dummySurfaceTexture: SurfaceTexture? = null
+    private var dummySurface: Surface? = null
 
     // SharedMemory
     private var _sharedMemory: android.os.SharedMemory? = null
@@ -195,6 +198,10 @@ class CameraBrokerService : Service() {
         _sharedMemoryBuffer = null
     }
 
+    // Actual frame size (will be set from supported sizes)
+    private var actualFrameWidth = FRAME_WIDTH
+    private var actualFrameHeight = FRAME_HEIGHT
+
     private fun openCamera() {
         cameraManager = getSystemService(CAMERA_SERVICE) as CameraManager
 
@@ -212,9 +219,63 @@ class CameraBrokerService : Service() {
 
             Log.d(TAG, "Opening camera: $cameraId")
 
+            // Get camera characteristics
+            val characteristics = cameraManager?.getCameraCharacteristics(cameraId)
+
+            // Check hardware level
+            val hardwareLevel = characteristics?.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
+            val levelName = when (hardwareLevel) {
+                CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY -> "LEGACY"
+                CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED -> "LIMITED"
+                CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL -> "FULL"
+                CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3 -> "LEVEL_3"
+                CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_EXTERNAL -> "EXTERNAL"
+                else -> "UNKNOWN($hardwareLevel)"
+            }
+            Log.d(TAG, "Camera hardware level: $levelName")
+
+            val streamConfigMap = characteristics?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+
+            // Get supported sizes for SurfaceTexture (required for LEGACY cameras)
+            val previewSizes = streamConfigMap?.getOutputSizes(SurfaceTexture::class.java)
+            Log.d(TAG, "Supported preview sizes: ${previewSizes?.take(5)?.map { "${it.width}x${it.height}" }}")
+
+            // Get supported sizes for YUV_420_888
+            val supportedSizes = streamConfigMap?.getOutputSizes(ImageFormat.YUV_420_888)
+            Log.d(TAG, "Supported YUV sizes: ${supportedSizes?.take(5)?.map { "${it.width}x${it.height}" }}")
+
+            // Filter 4:3 ratio sizes only
+            val sizes4x3 = supportedSizes?.filter { size ->
+                val ratio = size.width.toFloat() / size.height.toFloat()
+                kotlin.math.abs(ratio - 4f/3f) < 0.01f
+            }
+
+            Log.d(TAG, "4:3 ratio sizes: ${sizes4x3?.map { "${it.width}x${it.height}" }}")
+
+            // Find a suitable 4:3 size (prefer 640x480, then smallest)
+            val targetSize = sizes4x3?.let { sizes ->
+                sizes.find { it.width == 640 && it.height == 480 }
+                    ?: sizes.minByOrNull { it.width * it.height }
+            } ?: supportedSizes?.minByOrNull { it.width * it.height }
+
+            if (targetSize == null) {
+                Log.e(TAG, "No supported size found for YUV_420_888")
+                return
+            }
+
+            actualFrameWidth = targetSize.width
+            actualFrameHeight = targetSize.height
+            Log.d(TAG, "Selected size: ${actualFrameWidth}x${actualFrameHeight}")
+
+            // Create dummy SurfaceTexture (required for some cameras)
+            dummySurfaceTexture = SurfaceTexture(0).apply {
+                setDefaultBufferSize(actualFrameWidth, actualFrameHeight)
+            }
+            dummySurface = Surface(dummySurfaceTexture)
+
             // Create ImageReader for YUV frames
             imageReader = ImageReader.newInstance(
-                FRAME_WIDTH, FRAME_HEIGHT,
+                actualFrameWidth, actualFrameHeight,
                 ImageFormat.YUV_420_888,
                 2 // Max images in buffer
             ).apply {
@@ -257,56 +318,32 @@ class CameraBrokerService : Service() {
     private fun createCaptureSession() {
         val camera = cameraDevice ?: return
         val reader = imageReader ?: return
+        val previewSurface = dummySurface ?: return
 
         try {
-            val surfaces = listOf(reader.surface)
+            // Include both preview surface and ImageReader surface
+            val surfaces = listOf(previewSurface, reader.surface)
+            Log.d(TAG, "Creating capture session with ${surfaces.size} surfaces")
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                val outputConfig = surfaces.map { OutputConfiguration(it) }
-                val sessionConfig = SessionConfiguration(
-                    SessionConfiguration.SESSION_REGULAR,
-                    outputConfig,
-                    backgroundHandler?.looper?.let { HandlerExecutor(it) } ?: return,
-                    object : CameraCaptureSession.StateCallback() {
-                        override fun onConfigured(session: CameraCaptureSession) {
-                            Log.d(TAG, "Capture session configured")
-                            captureSession = session
-                            startPreview()
-                        }
-
-                        override fun onConfigureFailed(session: CameraCaptureSession) {
-                            Log.e(TAG, "Capture session configuration failed")
-                        }
+            // Use deprecated API for better compatibility
+            @Suppress("DEPRECATION")
+            camera.createCaptureSession(
+                surfaces,
+                object : CameraCaptureSession.StateCallback() {
+                    override fun onConfigured(session: CameraCaptureSession) {
+                        Log.d(TAG, "Capture session configured")
+                        captureSession = session
+                        startPreview()
                     }
-                )
-                camera.createCaptureSession(sessionConfig)
-            } else {
-                @Suppress("DEPRECATION")
-                camera.createCaptureSession(
-                    surfaces,
-                    object : CameraCaptureSession.StateCallback() {
-                        override fun onConfigured(session: CameraCaptureSession) {
-                            Log.d(TAG, "Capture session configured")
-                            captureSession = session
-                            startPreview()
-                        }
 
-                        override fun onConfigureFailed(session: CameraCaptureSession) {
-                            Log.e(TAG, "Capture session configuration failed")
-                        }
-                    },
-                    backgroundHandler
-                )
-            }
+                    override fun onConfigureFailed(session: CameraCaptureSession) {
+                        Log.e(TAG, "Capture session configuration failed")
+                    }
+                },
+                backgroundHandler
+            )
         } catch (e: Exception) {
             Log.e(TAG, "Failed to create capture session", e)
-        }
-    }
-
-    private class HandlerExecutor(private val looper: Looper) : java.util.concurrent.Executor {
-        private val handler = Handler(looper)
-        override fun execute(command: Runnable) {
-            handler.post(command)
         }
     }
 
@@ -350,8 +387,6 @@ class CameraBrokerService : Service() {
                 return
             }
 
-            Log.d(TAG, "Processing frame: ${image.width}x${image.height}")
-
             // Get YUV planes
             val yPlane = image.planes[0]
             val uPlane = image.planes[1]
@@ -375,7 +410,7 @@ class CameraBrokerService : Service() {
 
             // Update frame info
             val count = frameCounter.incrementAndGet()
-            if (count % 30 == 0L) {
+            if (count % 1000 == 0L) {
                 Log.d(TAG, "Frame count: $count")
             }
             _currentFrameInfo = FrameInfo(
@@ -407,5 +442,9 @@ class CameraBrokerService : Service() {
         cameraDevice = null
         imageReader?.close()
         imageReader = null
+        dummySurface?.release()
+        dummySurface = null
+        dummySurfaceTexture?.release()
+        dummySurfaceTexture = null
     }
 }

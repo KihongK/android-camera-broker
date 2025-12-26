@@ -54,4 +54,7 @@ dependencies {
 
     // GetStream WebRTC SDK
     implementation("io.getstream:stream-webrtc-android:1.3.8")
+
+    // Socket.IO for signaling
+    implementation("io.socket:socket.io-client:2.1.0")
 }

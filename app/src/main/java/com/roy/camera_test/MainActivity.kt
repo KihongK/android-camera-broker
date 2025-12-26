@@ -103,20 +103,17 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun checkPermissionsAndStart() {
-        val permissions = mutableListOf(Manifest.permission.CAMERA)
+        // Check camera permission only - notification permission is optional
+        val cameraGranted = ContextCompat.checkSelfPermission(
+            this, Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
-        }
+        Log.d(TAG, "Camera permission granted: $cameraGranted")
 
-        val notGranted = permissions.filter {
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }
-
-        if (notGranted.isEmpty()) {
+        if (cameraGranted) {
             startCameraService()
         } else {
-            permissionLauncher.launch(notGranted.toTypedArray())
+            permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA))
         }
     }
 
@@ -178,119 +175,134 @@ fun MainScreen(
     var internalTestEnabled by remember { mutableStateOf(true) }
 
     Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
                 .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text(
-                text = "Camera Broker Service",
-                style = MaterialTheme.typography.headlineMedium
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Button(
-                onClick = onStartService,
-                modifier = Modifier.fillMaxWidth()
+            // Left panel - Controls
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("Start Camera Service")
-            }
+                Text(
+                    text = "Camera Broker Service",
+                    style = MaterialTheme.typography.headlineSmall
+                )
 
-            Button(
-                onClick = onStopService,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Stop Camera Service")
-            }
+                Spacer(modifier = Modifier.height(8.dp))
 
-            OutlinedButton(
-                onClick = { statusText = onGetStatus() },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Refresh Status")
-            }
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-            // Internal test mode toggle
-            Card(
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                Button(
+                    onClick = onStartService,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Internal Test Mode",
-                            style = MaterialTheme.typography.titleSmall
-                        )
-                        Text(
-                            text = if (internalTestEnabled)
-                                "Preview available in this app"
-                            else
-                                "Disabled for external client app testing",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                    Text("Start Camera Service")
+                }
+
+                Button(
+                    onClick = onStopService,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Stop Camera Service")
+                }
+
+                OutlinedButton(
+                    onClick = { statusText = onGetStatus() },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Refresh Status")
+                }
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                // Internal test mode toggle
+                Card(
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Internal Test Mode",
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            Text(
+                                text = if (internalTestEnabled)
+                                    "Preview available"
+                                else
+                                    "External client mode",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = internalTestEnabled,
+                            onCheckedChange = { internalTestEnabled = it }
                         )
                     }
-                    Switch(
-                        checked = internalTestEnabled,
-                        onCheckedChange = { internalTestEnabled = it }
-                    )
+                }
+
+                // SharedMemory Preview button (only when internal test enabled)
+                if (internalTestEnabled) {
+                    Button(
+                        onClick = onOpenPreview,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.secondary
+                        )
+                    ) {
+                        Text("Open SharedMemory Preview")
+                    }
                 }
             }
 
-            // SharedMemory Preview button (only when internal test enabled)
-            if (internalTestEnabled) {
-                Button(
-                    onClick = onOpenPreview,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.secondary
-                    )
-                ) {
-                    Text("Open SharedMemory Preview")
-                }
-            } else {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    )
-                ) {
-                    Text(
-                        text = "Internal preview disabled.\nTest with external client app using:\nadb shell am start -a com.roy.camera_test.CAMERA_BROKER",
-                        modifier = Modifier.padding(16.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        textAlign = TextAlign.Center
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Status card
-            Card(
-                modifier = Modifier.fillMaxWidth()
+            // Right panel - Status
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "Status",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = statusText,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                // Status card
+                Card(
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Status",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = statusText,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+
+                if (!internalTestEnabled) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant
+                        )
+                    ) {
+                        Text(
+                            text = "Internal preview disabled.\nTest with external client app using:\nadb shell am start -a com.roy.camera_test.CAMERA_BROKER",
+                            modifier = Modifier.padding(16.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            textAlign = TextAlign.Center
+                        )
+                    }
                 }
             }
         }
