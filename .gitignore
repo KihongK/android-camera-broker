@@ -97,3 +97,7 @@ signing.properties
 # Sensitive files
 secrets.properties
 apikey.properties
+
+# Markdown files (except README.md)
+*.md
+!README.md
