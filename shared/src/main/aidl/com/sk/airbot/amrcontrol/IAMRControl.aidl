@@ -1,7 +1,7 @@
 // IAMRControl.aidl
-package com.roy.camera_test.shared;
+package com.sk.airbot.amrcontrol;
 
-// Declare any non-default types here with import statements
+import com.sk.airbot.amrcontrol.IAMRControlCallback;
 
 interface IAMRControl {
     boolean registerCallback(IAMRControlCallback callback);
@@ -210,6 +210,4 @@ interface IAMRControl {
 	const int ACTION_STATUS_RESUME			= 4;
 	const int ACTION_STATUS_COMPLETE		= 5;
 	const int ACTION_STATUS_FAIL			= 6;
-
-
 }

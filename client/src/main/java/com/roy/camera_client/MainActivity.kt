@@ -28,6 +28,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import com.roy.camera_client.amr.AMRCommandHandler
+import com.roy.camera_client.amr.AMRControlManager
 import com.roy.camera_client.ui.theme.CameraClientTheme
 import com.roy.camera_client.webrtc.SignalingClient
 import com.roy.camera_client.webrtc.WebRtcConfig
@@ -55,8 +57,13 @@ class MainActivity : ComponentActivity() {
     private var signalingClient: SignalingClient? = null
     private var surfaceViewRenderer: SurfaceViewRenderer? = null
 
+    // AMR Control
+    private var amrControlManager: AMRControlManager? = null
+    private var amrCommandHandler: AMRCommandHandler? = null
+
     // UI State
     private val _brokerState = mutableStateOf("Disconnected")
+    private val _amrState = mutableStateOf("Disconnected")
     private val _signalingState = mutableStateOf("Disconnected")
     private val _webRtcState = mutableStateOf("Not initialized")
     private val _dataChannelState = mutableStateOf("Closed")
@@ -111,11 +118,13 @@ class MainActivity : ComponentActivity() {
 
         initializeWebRtc()
         initializeSignaling()
+        initializeAMRControl()
 
         setContent {
             CameraClientTheme {
                 HostScreen(
                     brokerState = _brokerState.value,
+                    amrState = _amrState.value,
                     signalingState = _signalingState.value,
                     webRtcState = _webRtcState.value,
                     dataChannelState = _dataChannelState.value,
@@ -126,6 +135,8 @@ class MainActivity : ComponentActivity() {
                     onRoomNameChange = { _roomName.value = it },
                     onConnectBroker = { connectToBroker() },
                     onDisconnectBroker = { disconnectFromBroker() },
+                    onConnectAMR = { connectToAMR() },
+                    onDisconnectAMR = { disconnectFromAMR() },
                     onJoinRoom = { joinRoom() },
                     onLeaveRoom = { leaveRoom() },
                     onStartStreaming = { startStreaming() },
@@ -147,6 +158,7 @@ class MainActivity : ComponentActivity() {
         stopStreaming()
         surfaceViewRenderer?.let { webRtcManager?.removeLocalRenderer(it) }
         webRtcManager?.release()
+        disconnectFromAMR()
         disconnectFromBroker()
     }
 
@@ -253,24 +265,124 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun initializeAMRControl() {
+        amrControlManager = AMRControlManager(this).apply {
+            onConnected = {
+                runOnUiThread {
+                    _amrState.value = "Connected"
+                    addLog("AMR service connected")
+                }
+            }
+
+            onDisconnected = {
+                runOnUiThread {
+                    _amrState.value = "Disconnected"
+                    addLog("AMR service disconnected")
+                }
+            }
+
+            onCallbackReceived = { data ->
+                runOnUiThread {
+                    addLog("AMR callback: ${data.keySet().joinToString()}")
+                }
+            }
+
+            onError = { error ->
+                runOnUiThread {
+                    addLog("AMR error: $error")
+                }
+            }
+        }
+
+        amrCommandHandler = AMRCommandHandler(amrControlManager!!).apply {
+            onCommandResult = { cmd, success, message ->
+                runOnUiThread {
+                    val resultMsg = if (success) "OK" else "FAILED"
+                    addLog("AMR $cmd: $resultMsg")
+                    // Send result back via DataChannel
+                    sendNotification("AMR_RESULT:$cmd:$resultMsg:$message")
+                }
+            }
+        }
+    }
+
+    private fun connectToAMR() {
+        if (amrControlManager?.isConnected() == true) return
+
+        _amrState.value = "Connecting..."
+        val result = amrControlManager?.connect() ?: false
+        if (!result) {
+            _amrState.value = "Failed"
+            addLog("Failed to connect AMR service")
+        }
+    }
+
+    private fun disconnectFromAMR() {
+        amrControlManager?.disconnect()
+        _amrState.value = "Disconnected"
+    }
+
     private fun handleCommand(command: String) {
         Log.d(TAG, "Handling command: $command")
+
+        // Check if this is an AMR control command
+        val isAMRCommand = isAMRControlCommand(command)
+
         when {
+            // Media control commands
             command.startsWith("MUTE") -> {
                 _isMuted.value = true
                 webRtcManager?.setAudioEnabled(false)
+                sendNotification("ACK:MUTE")
             }
             command.startsWith("UNMUTE") -> {
                 _isMuted.value = false
                 webRtcManager?.setAudioEnabled(true)
+                sendNotification("ACK:UNMUTE")
             }
             command.startsWith("PING") -> {
                 sendNotification("PONG")
             }
+
+            // AMR control commands - delegate to AMRCommandHandler
+            isAMRCommand -> {
+                if (amrControlManager?.isConnected() != true) {
+                    addLog("AMR not connected, ignoring: $command")
+                    sendNotification("AMR_ERROR:NOT_CONNECTED")
+                    return
+                }
+                amrCommandHandler?.handleCommand(command)
+            }
+
             else -> {
                 Log.d(TAG, "Unknown command: $command")
+                sendNotification("ACK:UNKNOWN")
             }
         }
+    }
+
+    /**
+     * Check if the command is an AMR control command
+     */
+    private fun isAMRControlCommand(command: String): Boolean {
+        val upperCmd = command.uppercase().split(":").firstOrNull() ?: command.uppercase()
+        return upperCmd in listOf(
+            // Movement
+            "FORWARD", "BACKWARD", "LEFT", "RIGHT", "STOP", "MOVE",
+            "EMERGENCY_STOP",
+            // Navigation
+            "GOTO", "ROTATE",
+            // Driving
+            "DRIVE_START", "DRIVE_PAUSE", "DRIVE_RESUME", "DRIVE_STOP",
+            // Mapping
+            "MAP_MANUAL", "MAP_AUTO", "MAP_STOP",
+            // Station
+            "RETURN_STATION", "CHARGE_START", "CHARGE_STOP", "DOCKING",
+            // Utility
+            "RESET", "LIDAR_ON", "LIDAR_OFF", "FOLLOW_ME",
+            // Query
+            "GET_POSITION", "GET_VERSION", "GET_TEMP", "GET_STATUS", "QUERY_SENSOR"
+        ) || command.trim().startsWith("{")  // JSON commands
     }
 
     private fun addLog(message: String) {
@@ -413,6 +525,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun HostScreen(
     brokerState: String,
+    amrState: String,
     signalingState: String,
     webRtcState: String,
     dataChannelState: String,
@@ -423,6 +536,8 @@ fun HostScreen(
     onRoomNameChange: (String) -> Unit,
     onConnectBroker: () -> Unit,
     onDisconnectBroker: () -> Unit,
+    onConnectAMR: () -> Unit,
+    onDisconnectAMR: () -> Unit,
     onJoinRoom: () -> Unit,
     onLeaveRoom: () -> Unit,
     onStartStreaming: () -> Unit,
@@ -432,6 +547,7 @@ fun HostScreen(
     onRendererCreated: (SurfaceViewRenderer) -> Unit
 ) {
     val isInRoom = signalingState.startsWith("In room")
+    val isAMRConnected = amrState == "Connected"
 
     Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
         Row(
@@ -507,6 +623,7 @@ fun HostScreen(
                 ) {
                     Column(modifier = Modifier.padding(8.dp)) {
                         StatusRow("Broker", brokerState, brokerState == "Connected")
+                        StatusRow("AMR", amrState, isAMRConnected)
                         StatusRow("Signaling", signalingState, isInRoom)
                         StatusRow("WebRTC", webRtcState, webRtcState == "CONNECTED")
                         StatusRow("DataChannel", dataChannelState, dataChannelState == "OPEN")
@@ -523,7 +640,7 @@ fun HostScreen(
                     enabled = !isInRoom
                 )
 
-                // Broker controls
+                // Broker & AMR controls
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -536,6 +653,28 @@ fun HostScreen(
                     ) {
                         Text("Broker", style = MaterialTheme.typography.bodySmall)
                     }
+                    Button(
+                        onClick = if (isAMRConnected) onDisconnectAMR else onConnectAMR,
+                        modifier = Modifier.weight(1f),
+                        colors = if (isAMRConnected) {
+                            ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary)
+                        } else {
+                            ButtonDefaults.buttonColors()
+                        },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            if (isAMRConnected) "AMR" else "AMR",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+
+                // Room controls
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     Button(
                         onClick = if (isInRoom) onLeaveRoom else onJoinRoom,
                         modifier = Modifier.weight(1f),
@@ -551,13 +690,6 @@ fun HostScreen(
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
-                }
-
-                // Streaming controls
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
                     Button(
                         onClick = if (isStreaming) onStopStreaming else onStartStreaming,
                         modifier = Modifier.weight(1f),
@@ -574,6 +706,13 @@ fun HostScreen(
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
+                }
+
+                // Streaming controls
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     OutlinedButton(
                         onClick = onToggleMute,
                         modifier = Modifier.weight(1f),
@@ -585,19 +724,17 @@ fun HostScreen(
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
+                    Button(
+                        onClick = { onSendNotification("NOTIFY:ALERT") },
+                        modifier = Modifier.weight(1f),
+                        enabled = dataChannelState == "OPEN",
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                    ) {
+                        Text("Alert", style = MaterialTheme.typography.bodySmall)
+                    }
                 }
 
                 HorizontalDivider()
-
-                // Send alert notification
-                Button(
-                    onClick = { onSendNotification("NOTIFY:ALERT") },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = dataChannelState == "OPEN",
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-                ) {
-                    Text("Send ALERT", style = MaterialTheme.typography.bodySmall)
-                }
 
                 // Log
                 Text(
@@ -623,7 +760,8 @@ fun HostScreen(
                                 color = when {
                                     log.startsWith(">") -> MaterialTheme.colorScheme.primary
                                     log.startsWith("<") -> MaterialTheme.colorScheme.secondary
-                                    log.startsWith("Error") -> MaterialTheme.colorScheme.error
+                                    log.startsWith("Error") || log.contains("FAILED") -> MaterialTheme.colorScheme.error
+                                    log.startsWith("AMR") -> MaterialTheme.colorScheme.tertiary
                                     else -> MaterialTheme.colorScheme.onSurface
                                 }
                             )
